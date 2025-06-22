@@ -1,10 +1,24 @@
 const chatBody = document.querySelector(".chat-body");
 const messageInput = document.querySelector(".message-input");
 const sendMessageButton = document.querySelector("#send-message");
+const fileInput = document.querySelector("#file-input");
+const fileUploadWrapper = document.querySelector(".file-upload-wrapper");
+const fileCancelButton = document.querySelector("#file-cancel");
+const chatbotToggler = document.querySelector("#chatbot-toggler");
+const closeChatbot = document.querySelector("#close-chatbot");
 
+const API_KEY = `your_key`;
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
 const userData = {
   message: null,
+  file: {
+    data: null,
+    mime_type: null,
+  },
 };
+
+const chatHistory = [];
+const initialInputHeight = messageInput.scrollHeight;
 
 //create message element with dynamic classes and return it
 const createMessageElement = (content, ...classes) => {
@@ -14,14 +28,68 @@ const createMessageElement = (content, ...classes) => {
   return div;
 };
 
+const generateBotResponse = async (incomingMessageDiv) => {
+  const messageElement = incomingMessageDiv.querySelector(".message-text");
+  chatHistory.push({
+    role: "user",
+    parts: [
+      {
+        text: userData.message,
+      },
+      ...(userData.file.data ? [{ inline_data: userData.file }] : []),
+    ],
+  });
+  const requestOptions = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: chatHistory,
+    }),
+  };
+  try {
+    // console.log(requestOptions);
+    const response = await fetch(API_URL, requestOptions);
+    const data = await response.json();
+    // console.log(response);
+
+    if (!response.ok) throw new Error(data.error.message);
+    const apiResponseText = data.candidates[0].content.parts[0].text
+      .replace(/\*{1,2}(.*?)\*{1,2}/g, "$1")
+      .trim();
+    messageElement.innerHTML = apiResponseText;
+
+    chatHistory.push({
+      role: "model",
+      parts: [
+        {
+          text: apiResponseText,
+        },
+      ],
+    });
+  } catch (error) {
+    console.log(error);
+    messageElement.innerHTML = error.message;
+    messageElement.style.color = "#ff0000";
+  } finally {
+    userData.file = {};
+    incomingMessageDiv.classList.remove("thinking");
+    chatBody.scrollTo({ top: chatBody.scrollHeight, behavior: "smooth" });
+  }
+};
+
 // handle outgoing user messages
 const handleOutgoingMessage = (e) => {
   e.preventDefault();
   userData.message = messageInput.value.trim();
   messageInput.value = "";
+  fileUploadWrapper.classList.remove("file-uploaded");
+  messageInput.dispatchEvent(new Event("input"));
   // create and display user message
-  const messageContent = `<div class="message-text">${userData.message}
-          </div>`;
+  const messageContent = `<div class="message-text"></div>${
+    userData.file.data
+      ? `<img src="data:${userData.file.mime_type};base64,${userData.file.data}" class="attachment" />`
+      : ""
+  }`;
   const outgoingMessageDiv = createMessageElement(
     messageContent,
     "user-message"
@@ -29,6 +97,7 @@ const handleOutgoingMessage = (e) => {
   outgoingMessageDiv.querySelector(".message-text").textContent =
     userData.message;
   chatBody.append(outgoingMessageDiv);
+  chatBody.scrollTo({ top: chatBody.scrollHeight, behavior: "smooth" });
 
   // simulating bot response with thinking ind after a timeout
   setTimeout(() => {
@@ -50,26 +119,98 @@ const handleOutgoingMessage = (e) => {
               <div class="dot"></div>
             </div>
           </div>`;
+
     const incomingMessageDiv = createMessageElement(
       messageContent,
       "bot-message",
       "thinking"
     );
-
     chatBody.append(incomingMessageDiv);
+    chatBody.scrollTo({ top: chatBody.scrollHeight, behavior: "smooth" });
+    generateBotResponse(incomingMessageDiv);
   }, 600);
 };
 
 //handle enter key press sending messages
 messageInput.addEventListener("keydown", (e) => {
   const userMessage = e.target.value.trim();
-  if (e.key === "Enter" && userMessage) {
+  if (
+    e.key === "Enter" &&
+    userMessage &&
+    !e.shiftKey &&
+    window.innerWidth > 768
+  ) {
     handleOutgoingMessage(e);
-    messageInput.value = null;
+    messageInput.value = "";
   }
 });
+
+messageInput.addEventListener("input", () => {
+  messageInput.style.height = `${initialInputHeight}px`;
+  messageInput.style.height = `${messageInput.scrollHeight}px`;
+  document.querySelector(".chat-form").style.borderRadius =
+    messageInput.scrollHeight > initialInputHeight ? "15px" : "32px";
+});
+
+// receiving img
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    fileUploadWrapper.querySelector("img").src = e.target.result;
+    fileUploadWrapper.classList.add("file-uploaded");
+    const base64String = e.target.result.split(",")[1];
+
+    // store file data in userdata
+    userData.file = {
+      data: base64String,
+      mime_type: file.type,
+    };
+    fileInput.value = "";
+  };
+  reader.readAsDataURL(file);
+});
+
+fileCancelButton.addEventListener("click", () => {
+  userData.file = {};
+  fileUploadWrapper.classList.remove("file-uploaded");
+});
+
+//initilizing emoji
+const picker = new EmojiMart.Picker({
+  theme: "light",
+  skinTonePosition: "none",
+  previewPosition: "none",
+  onEmojiSelect: (emoji) => {
+    const { selectionStart: start, selectionEnd: end } = messageInput;
+    messageInput.setRangeText(emoji.native, start, end, "end");
+    messageInput.focus();
+  },
+  onClickOutside: (e) => {
+    if (e.target.id === "emoji-picker") {
+      document.body.classList.toggle("show-emoji-picker");
+    } else {
+      document.body.classList.remove("show-emoji-picker");
+    }
+  },
+});
+document.querySelector(".chat-form").appendChild(picker);
 
 sendMessageButton.addEventListener("click", (e) => {
   handleOutgoingMessage(e);
   messageInput.value = "";
+});
+
+document
+  .querySelector("#file-upload")
+  .addEventListener("click", () => fileInput.click());
+
+chatbotToggler.addEventListener("click", () =>
+  document.body.classList.toggle("show-chatbot")
+);
+
+closeChatbot.addEventListener("click", () => {
+  document.body.classList.remove("show-chatbot");
 });
